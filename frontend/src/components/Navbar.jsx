@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { auth, db } from '../App';
 import { signOut } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, getDocs } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 
 const Navbar = ({ user, notifications = [] }) => {
   const navigate = useNavigate();
