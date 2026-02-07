@@ -1,12 +1,13 @@
-import React, { useState } from 'react'; // Removed unused useRef
+import React, { useState } from 'react';
 import { db, auth } from '../App';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
 
 const CreatePost = ({ user }) => {
   const [content, setContent] = useState('');
   const [media, setMedia] = useState(null);
   const [mediaType, setMediaType] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const handleFileChange = (e, type) => {
     const file = e.target.files[0];
@@ -18,29 +19,66 @@ const CreatePost = ({ user }) => {
 
   const handlePost = async () => {
     if (!content && !media) return;
+    if (!auth.currentUser) return;
+    
+    setIsUploading(true);
+
     try {
-      // Removed 'const postRef =' because the variable was never used
+      let finalMediaUrl = null;
+
+      // 1. Upload to Cloudinary if media exists
+      if (media) {
+        const formData = new FormData();
+        formData.append("file", media);
+        formData.append("upload_preset", "srit_connect"); 
+
+        const res = await fetch("https://api.cloudinary.com/v1_1/dablxxzsi/auto/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await res.json();
+        if (data.secure_url) {
+          finalMediaUrl = data.secure_url;
+        }
+      }
+
+      // 2. Points Logic: Get current points and prepare update
+      const userRef = doc(db, "users", auth.currentUser.uid);
+      const userSnap = await getDoc(userRef);
+      let currentPoints = 0;
+      if (userSnap.exists()) {
+        currentPoints = userSnap.data().totalPoints || 0;
+      }
+
+      // 3. Save to Firebase Firestore
       await addDoc(collection(db, "posts"), {
         authorId: auth.currentUser.uid,
-        authorName: user?.name || "User",
+        authorName: user?.name || auth.currentUser.displayName || "Student",
         authorBranch: user?.branch || "General",
         authorYear: user?.year || "1st",
         content,
-        mediaUrl: media ? URL.createObjectURL(media) : null,
+        mediaUrl: finalMediaUrl,
         mediaType,
         createdAt: serverTimestamp(),
         likes: [],
         comments: []
       });
 
+      // 4. Update Points in Firestore (+2 Pts)
+      await updateDoc(userRef, {
+        totalPoints: currentPoints + 2
+      });
+
+      // 5. Send Notifications to Followers
       if (user?.followers && user.followers.length > 0) {
         const notificationPromises = user.followers.map(followerId => 
           addDoc(collection(db, "notifications"), {
             recipientId: followerId,
             senderId: auth.currentUser.uid,
-            senderName: user.name,
+            senderName: user.name || "A student",
             type: "new_post",
-            message: `${user.name} shared a new post.`,
+            message: `${user.name || "Someone"} shared a new post.`,
             read: false,
             createdAt: serverTimestamp()
           })
@@ -48,56 +86,69 @@ const CreatePost = ({ user }) => {
         await Promise.all(notificationPromises);
       }
 
+      // 6. Reset Form
       setContent('');
       setMedia(null);
+      setMediaType(null);
       setIsModalOpen(false);
+      
     } catch (err) {
-      console.error("Error creating post/notifications:", err);
+      console.error("Error creating post:", err);
+      alert("Failed to post. Check internet connection.");
+    } finally {
+      setIsUploading(false);
     }
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-4">
-      <div className="flex gap-3 items-center">
-        <div className="w-10 h-10 bg-[#800000] rounded-full flex items-center justify-center text-white font-bold uppercase shrink-0">
-          {user?.name?.charAt(0)}
+    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-5 mb-6 mx-2 sm:mx-0">
+      {/* Trigger Bar */}
+      <div className="flex gap-4 items-center">
+        <div className="w-12 h-12 bg-[#800000] rounded-full flex items-center justify-center text-white font-black uppercase shrink-0 shadow-sm border-2 border-white ring-1 ring-gray-100">
+          {user?.name?.charAt(0) || auth.currentUser?.displayName?.charAt(0)}
         </div>
         <button 
           onClick={() => setIsModalOpen(true)}
-          className="flex-1 text-left px-5 py-2.5 bg-gray-50 border border-gray-200 rounded-full text-gray-500 hover:bg-gray-100 text-sm font-medium transition"
+          className="flex-1 text-left px-6 py-3 bg-gray-50 border border-gray-100 rounded-full text-gray-400 hover:bg-gray-100 text-[14px] font-medium transition-all"
         >
-          Start a post...
+          Share an update or ask a question...
         </button>
       </div>
 
-      <div className="flex justify-around mt-3 pt-2 border-t border-gray-50">
-        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 hover:bg-gray-50 px-4 py-2 rounded-lg text-gray-600 font-bold text-xs transition">
-          <span className="text-blue-500 text-base">🖼️</span> Photo
+      <div className="flex justify-around mt-4 pt-3 border-t border-gray-50">
+        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 hover:bg-gray-50 px-5 py-2.5 rounded-2xl text-gray-500 font-black text-[10px] uppercase tracking-widest transition">
+          <span className="text-xl">🖼️</span> Photo
         </button>
-        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 hover:bg-gray-50 px-4 py-2 rounded-lg text-gray-600 font-bold text-xs transition">
-          <span className="text-green-500 text-base">📽️</span> Video
+        <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 hover:bg-gray-50 px-5 py-2.5 rounded-2xl text-gray-500 font-black text-[10px] uppercase tracking-widest transition">
+          <span className="text-xl">🎥</span> Video
         </button>
       </div>
 
+      {/* Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-white w-full max-w-xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b flex justify-between items-center">
-              <h3 className="text-lg font-bold text-gray-800">Create a post</h3>
-              <button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-500">✕</button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#800000]/10 backdrop-blur-md p-4">
+          <div className="bg-white w-full max-w-xl rounded-[32px] shadow-2xl overflow-hidden flex flex-col border border-white/20">
+            <div className="p-6 border-b border-gray-50 flex justify-between items-center">
+              <h3 className="text-[16px] font-black text-gray-900 uppercase tracking-tight">Create Post</h3>
+              <button 
+                onClick={() => setIsModalOpen(false)} 
+                className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 transition"
+              >✕</button>
             </div>
             
-            <div className="p-4 overflow-y-auto">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 bg-[#800000] rounded-full flex items-center justify-center text-white font-bold uppercase">{user?.name?.charAt(0)}</div>
+            <div className="p-6 overflow-y-auto">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 bg-[#800000] rounded-full flex items-center justify-center text-white font-black uppercase shadow-inner">
+                  {user?.name?.charAt(0)}
+                </div>
                 <div>
-                  <p className="font-bold text-sm">{user?.name}</p>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase">Posting to Campus Feed</p>
+                  <p className="font-black text-sm uppercase text-gray-900">{user?.name}</p>
+                  <p className="text-[9px] text-[#800000] font-black uppercase tracking-widest">Campus Feed • +2 Points</p>
                 </div>
               </div>
 
               <textarea 
-                className="w-full min-h-[150px] text-base outline-none resize-none placeholder-gray-400"
+                className="w-full min-h-[150px] text-lg outline-none resize-none placeholder-gray-300 font-medium text-gray-700"
                 placeholder="What's on your mind, scholar?"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
@@ -105,38 +156,37 @@ const CreatePost = ({ user }) => {
               />
               
               {media && (
-                <div className="relative border rounded-lg overflow-hidden my-4 bg-gray-50">
-                  <button onClick={() => setMedia(null)} className="absolute top-2 right-2 bg-black/70 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs z-10">✕</button>
+                <div className="relative border rounded-2xl overflow-hidden my-4 bg-gray-50 shadow-inner">
+                  <button 
+                    onClick={() => {setMedia(null); setMediaType(null);}} 
+                    className="absolute top-3 right-3 bg-black/50 backdrop-blur-md text-white rounded-full w-8 h-8 flex items-center justify-center text-xs z-10 hover:bg-red-500 transition"
+                  >✕</button>
                   {mediaType === 'image' ? (
-                    <img 
-                      src={URL.createObjectURL(media)} 
-                      alt="User upload preview" // Added alt prop to fix ESLint warning
-                      className="w-full max-h-72 object-contain" 
-                    />
+                    <img src={URL.createObjectURL(media)} alt="Preview" className="w-full max-h-80 object-contain" />
                   ) : (
-                    <video src={URL.createObjectURL(media)} className="w-full max-h-72" controls />
+                    <video src={URL.createObjectURL(media)} className="w-full max-h-80" controls />
                   )}
                 </div>
               )}
             </div>
 
-            <div className="p-4 border-t bg-gray-50 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <label className="p-2 rounded-full hover:bg-gray-200 cursor-pointer transition text-xl">
+            <div className="p-6 border-t border-gray-50 bg-gray-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <label className="w-12 h-12 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm cursor-pointer transition text-2xl group relative">
                   <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFileChange(e, 'image')} />
                   🖼️
                 </label>
-                <label className="p-2 rounded-full hover:bg-gray-200 cursor-pointer transition text-xl">
+                <label className="w-12 h-12 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm cursor-pointer transition text-2xl">
                   <input type="file" className="hidden" accept="video/*" onChange={(e) => handleFileChange(e, 'video')} />
                   📽️
                 </label>
               </div>
               <button 
                 onClick={handlePost}
-                disabled={!content && !media}
-                className="bg-[#800000] text-white px-8 py-2 rounded-full font-black text-xs uppercase tracking-wider disabled:opacity-40 hover:bg-[#600000] transition-all shadow-md active:scale-95"
+                disabled={(!content && !media) || isUploading}
+                className="bg-[#800000] text-white px-10 py-3.5 rounded-full font-black text-[11px] uppercase tracking-[0.1em] disabled:opacity-30 hover:bg-[#600000] transition-all shadow-xl active:scale-95"
               >
-                Post
+                {isUploading ? "Uploading..." : "Post & Earn"}
               </button>
             </div>
           </div>
